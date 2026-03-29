@@ -1,0 +1,25 @@
+{
+  "name": "codementor-backend",
+  "version": "2.0.0",
+  "description": "AI-powered DSA mentor with Featherless.ai",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
+    "express": "^4.22.1",
+    "express-rate-limit": "^7.5.1",
+    "helmet": "^7.2.0",
+    "node-cache": "^5.1.2",
+    "openai": "^6.33.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
