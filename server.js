@@ -16,20 +16,23 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(rateLimit({ windowMs: config.rateLimit.windowMs, max: config.rateLimit.max }));
 
-// Add this after app.use(express.json())
 app.use((req, res, next) => {
   if (req.path === '/api/chat') {
-    console.log('\n=== CHAT REQUEST ===');
-    console.log('Query:', req.body.query);
-    console.log('Problem:', req.body.problemData?.title);
-    console.log('Chat history length:', req.body.chatHistory?.length);
-    if (req.body.chatHistory) {
-      console.log('Last 3 messages:');
-      req.body.chatHistory.slice(-3).forEach((m, i) => {
-        console.log(`  ${i+1}. ${m.role}: ${m.content.substring(0, 80)}`);
+    console.log('\n' + '='.repeat(60));
+    console.log('CHAT REQUEST RECEIVED');
+    console.log('='.repeat(60));
+    console.log(`Query: "${req.body.query}"`);
+    console.log(`Problem: ${req.body.problemData?.title}`);
+    console.log(`Chat History Length: ${req.body.chatHistory?.length || 0}`);
+    
+    if (req.body.chatHistory && req.body.chatHistory.length > 0) {
+      console.log('\nFull Conversation History:');
+      req.body.chatHistory.forEach((msg, idx) => {
+        const role = msg.role === 'user' ? '👤 Student' : '🎯 Mentor';
+        console.log(`${idx + 1}. ${role}: ${msg.content.substring(0, 150)}`);
       });
     }
-    console.log('===================\n');
+    console.log('='.repeat(60) + '\n');
   }
   next();
 });

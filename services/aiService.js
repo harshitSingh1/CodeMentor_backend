@@ -3,8 +3,7 @@ const NodeCache = require('node-cache');
 const config = require('../config');
 const queueService = require('./queueService');
 
-// Use shorter cache TTL and be more selective about caching
-const cache = new NodeCache({ stdTTL: 300 }); // 5 minutes instead of 1 hour
+const cache = new NodeCache({ stdTTL: 300 });
 
 class AIService {
   constructor() {
@@ -22,15 +21,6 @@ class AIService {
   }
 
   async callModel(prompt, options = {}) {
-    // DON'T cache chat queries - they need fresh responses
-    const skipCache = options.skipCache || true; // Default to skip cache for chat
-    
-    if (!skipCache) {
-      const cacheKey = `prompt_${Buffer.from(prompt).toString('base64').slice(0, 100)}`;
-      const cached = cache.get(cacheKey);
-      if (cached) return cached;
-    }
-
     return queueService.add(async () => {
       let lastError = null;
       
@@ -42,15 +32,14 @@ class AIService {
             messages: [
               {
                 role: 'system',
-                content: `You are an expert DSA mentor. Always focus on the CURRENT problem the student is working on.
-                
-CRITICAL RULES:
-1. Pay attention to the problem title and description in each request
-2. If the problem changed, completely forget the previous problem
-3. Give detailed, helpful responses about the current problem only
-4. Provide pseudo-code when asked, not complete solutions
-5. Compare different approaches with time/space complexity
-6. Use emojis (💡, ⚡, 📊, 🎯, ⚠️) to make responses engaging`
+                content: `You are an expert DSA mentor. Be helpful and conversational.
+
+IMPORTANT RULES:
+1. REMEMBER the conversation history - respond to what the user just asked
+2. If user says "yes please" or "share the code", provide what they requested in the previous message
+3. Provide pseudo-code or actual code when asked, but explain it well
+4. Use markdown with emojis for clarity
+5. Keep responses engaging and educational`
               },
               { role: 'user', content: prompt }
             ],
@@ -61,10 +50,6 @@ CRITICAL RULES:
           
           const result = completion.choices[0].message.content;
           console.log(`[AI] Got response from ${model}, length: ${result?.length || 0}`);
-          
-          if (!skipCache && options.cacheable) {
-            cache.set(cacheKey, result);
-          }
           return result;
           
         } catch (error) {
@@ -78,22 +63,17 @@ CRITICAL RULES:
   }
 
   async processQuery({ query, problemData, chatHistory }) {
-    // Log the current problem to debug
-    console.log(`[AI] Processing query for problem: ${problemData?.title || 'Unknown'}`);
-    console.log(`[AI] Query: ${query}`);
+    console.log(`[AI] Processing query: "${query}"`);
+    console.log(`[AI] Chat history length: ${chatHistory?.length || 0}`);
     
     const prompt = this.buildQueryPrompt({ query, problemData, chatHistory });
-    const rawResponse = await this.callModel(prompt, { skipCache: true, temperature: 0.7 });
-    const parsed = this.parseAIResponse(rawResponse);
-    
-    return parsed;
+    const rawResponse = await this.callModel(prompt, { temperature: 0.7 });
+    return this.parseAIResponse(rawResponse);
   }
 
   async generateHint(level, problemData) {
-    console.log(`[HINT] Generating level ${level} hint for: ${problemData?.title}`);
-    
     const prompt = this.buildHintPrompt(level, problemData);
-    const hint = await this.callModel(prompt, { skipCache: false, temperature: 0.6, maxTokens: 300 });
+    const hint = await this.callModel(prompt, { temperature: 0.6, maxTokens: 300 });
     
     let cleanHint = hint.trim()
       .replace(/```json\s*/gi, '')
@@ -105,46 +85,45 @@ CRITICAL RULES:
   }
 
   buildQueryPrompt({ query, problemData, chatHistory }) {
-    // Get the current problem clearly
-    const currentProblem = `
-CURRENT PROBLEM (THIS IS THE ONLY PROBLEM YOU SHOULD DISCUSS):
-Title: ${problemData?.title || 'Unknown'}
-Difficulty: ${problemData?.difficulty || 'Unknown'}
-Platform: ${problemData?.platform || 'Unknown'}
-
-Problem Description:
-${(problemData?.description || problemData?.fullProblemText || '').substring(0, 2000)}
-`;
-
-    // Only include recent relevant chat history
-    const recentHistory = (chatHistory || []).slice(-6);
-    let historyText = '';
-    if (recentHistory.length > 0) {
-      historyText = '\nRECENT CONVERSATION (for context only, focus on current problem):\n';
-      recentHistory.forEach(m => {
-        historyText += `${m.role === 'user' ? 'Student' : 'Mentor'}: ${m.content}\n`;
-      });
+    // Build full conversation history for context
+    let conversationHistory = '';
+    if (chatHistory && chatHistory.length > 0) {
+      conversationHistory = '\n\nCONVERSATION HISTORY (IMPORTANT - use this to understand context):\n';
+      conversationHistory += '```\n';
+      for (let i = 0; i < chatHistory.length; i++) {
+        const msg = chatHistory[i];
+        const role = msg.role === 'user' ? 'Student' : 'Mentor';
+        conversationHistory += `${role}: ${msg.content}\n`;
+      }
+      conversationHistory += '```\n';
     }
 
-    return `${currentProblem}
+    return `You are an expert DSA mentor helping a student solve a coding problem.
 
-${historyText}
+PROBLEM DETAILS:
+Title: ${problemData?.title || 'Unknown'}
+Difficulty: ${problemData?.difficulty || 'Unknown'}
+Description: ${(problemData?.description || problemData?.fullProblemText || '').substring(0, 2000)}
+Platform: ${problemData?.platform || 'Unknown'}
 
-STUDENT'S QUESTION: ${query}
+${conversationHistory}
 
-INSTRUCTIONS:
-1. IGNORE any previous problems - ONLY discuss "${problemData?.title || 'the current problem'}"
-2. If the student asks for the "best approach", compare 2-3 approaches with time/space complexity
-3. If they ask for code, provide PSEUDO-CODE or high-level structure
-4. Be detailed and educational - explain WHY approaches work
-5. Use markdown with emojis for clarity
+STUDENT'S LATEST QUESTION: "${query}"
+
+IMPORTANT INSTRUCTIONS:
+1. READ THE CONVERSATION HISTORY above to understand what the student is asking for
+2. If the student says "yes please", "share the code", "explain more", "yes explain", etc. - provide what they requested in your PREVIOUS response
+3. If the student asks for code, provide actual code with explanations
+4. If the student asks for pseudo-code, provide pseudo-code
+5. Be conversational - respond directly to their question
+6. Use markdown with emojis (💡, ⚡, 📊, 🎯, ⚠️)
 
 Return ONLY valid JSON in this exact format:
 {
-  "reply": "Your detailed response about the CURRENT problem only",
+  "reply": "Your detailed response that DIRECTLY answers the student's latest question based on conversation context",
   "approaches": [
     {
-      "name": "Approach 1 Name",
+      "name": "Approach Name",
       "idea": "Brief description",
       "time": "O(...)",
       "space": "O(...)"
@@ -152,26 +131,15 @@ Return ONLY valid JSON in this exact format:
   ]
 }
 
-Example for a grid problem like "Get Biggest Three Rhombus Sums":
-{
-  "reply": "For finding the biggest three rhombus sums in a grid, here are the main approaches:\\n\\n**1. Brute Force** 💪\\n- Iterate through all possible rhombus centers and sizes\\n- Calculate sums by traversing the rhombus perimeter\\n- Time: O(m * n * min(m,n)²), Space: O(1)\\n- Simple but slower for large grids\\n\\n**2. Prefix Sum Optimization** ⚡\\n- Precompute prefix sums for diagonals\\n- Calculate rhombus sums in O(1) time\\n- Time: O(m * n * min(m,n)), Space: O(m * n)\\n- Much faster for larger grids\\n\\nWould you like me to explain the prefix sum approach in more detail?",
-  "approaches": [
-    {
-      "name": "Brute Force",
-      "idea": "Check every possible rhombus center and size",
-      "time": "O(m * n * k²)",
-      "space": "O(1)"
-    },
-    {
-      "name": "Prefix Sum Optimization",
-      "idea": "Precompute diagonal prefix sums for O(1) rhombus sum calculation",
-      "time": "O(m * n * k)",
-      "space": "O(m * n)"
-    }
-  ]
-}
+EXAMPLE:
+If conversation shows:
+Student: "explain the frequency count approach"
+Mentor: [explained frequency count]
+Student: "share the pseudo code"
 
-Now respond about the CURRENT problem only. Be helpful and detailed.`;
+Then your response should provide the pseudo-code for frequency count.
+
+Now respond to: "${query}"`;
   }
 
   buildHintPrompt(level, problemData) {
@@ -201,30 +169,20 @@ Return ONLY the hint text, no extra formatting.`;
     try {
       let cleaned = raw.trim();
       
-      // Remove markdown code blocks
       cleaned = cleaned.replace(/^```json\s*/i, '');
       cleaned = cleaned.replace(/^```\s*/i, '');
       cleaned = cleaned.replace(/\s*```$/i, '');
       
-      // Find JSON
       const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
         
-        let reply = parsed.reply || parsed.response || cleaned;
-        
-        // Ensure reply is substantial
-        if (reply.length < 50 && cleaned.length > 100) {
-          reply = cleaned;
-        }
-        
         return {
-          reply: reply,
+          reply: parsed.reply || cleaned,
           approaches: Array.isArray(parsed.approaches) ? parsed.approaches : []
         };
       }
       
-      // Return cleaned text as reply
       return {
         reply: cleaned,
         approaches: []
